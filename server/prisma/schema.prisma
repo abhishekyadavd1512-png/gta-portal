@@ -1,0 +1,161 @@
+// GTA Portal — Prisma schema
+// Maps 1:1 to the roles/entities described in the board's architecture decision
+// (applicant / faculty / admin via Entra ID App Roles) and to the applicant/faculty
+// flows built in the earlier mockup. Kept intentionally small: this is the working
+// skeleton, not the final data model — IST's use cases will extend this.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  APPLICANT
+  FACULTY
+  ADMIN
+}
+
+enum ApplicationStatus {
+  PENDING
+  INTERVIEW
+  HIRED
+}
+
+enum EnrollmentType {
+  FULL_TIME
+  PART_TIME
+}
+
+model User {
+  id         String   @id @default(cuid())
+  email      String   @unique
+  name       String
+  gNumber    String?
+  phone      String?
+  role       Role
+  program    String?
+  department String?
+  degree     String?
+  expectedGraduation String?
+  gpa        String?
+  priorExperience    String?
+
+  // "Accepted the offer" post-hire onboarding questionnaire
+  paidPositionLast2Years    Boolean?
+  onboardingPacketCompleted Boolean?
+  i9FormCompleted           Boolean?
+  usCitizenOrPermRes        Boolean?
+  hasSSN                    Boolean?
+  isNewGTA                  Boolean?
+  celtdCompleted            Boolean?
+  celtdEvidenceFileName     String?
+  celtdCertificateFileName  String?
+  coursesRegisteredNextTerm Int?
+  onboardingSubmittedAt     DateTime?
+
+  // Full profile, matching the original PowerApps Profile table
+  preferredName String?
+  addressLine1  String?
+  addressLine2  String?
+  city          String?
+  state         String?
+  zip           String?
+  linkedIn      String?
+  college       String?
+  major         String?
+  anticipatedGraduationSemester String?
+  anticipatedGraduationYear     Int?
+  earnedDegreePreviously        Boolean?
+  highestDegreeDegree           String?
+  highestDegreeMajor            String?
+  highestDegreeUniversity       String?
+  highestDegreeYear             Int?
+  gtaExperience     Boolean?
+  gtaSemesters      Int?
+  priorITExperience Boolean?
+  itIndustryYoe     Int?
+  technology        String?
+  priorGTAExperienceInfo String?
+  workedForGMUBefore     Boolean?
+  whereAtGMU              String?
+  phdDissertationAdvisor  String?
+  phdITConcentration      String?
+  resumeFileName                String?
+  unofficialTranscriptFileName  String?
+
+  // Letter of Recommendation: no file upload — just the names of
+  // professors who highly rate/recommend the applicant
+  recommenders String?
+
+  // Asked once ever, in the Apply flow's Education & Documents step
+  isFinalSemester Boolean?
+  // In-state / Out-of-state — no international option
+  tuitionStatus   String?
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  applications Application[]
+}
+
+model Course {
+  id          String   @id @default(cuid())
+  courseCode  String
+  courseTitle String
+  term        String
+  createdAt   DateTime @default(now())
+
+  sections     Section[]
+  applications Application[]
+
+  @@unique([courseCode, term])
+}
+
+model Section {
+  id           String   @id @default(cuid())
+  course       Course   @relation(fields: [courseId], references: [id])
+  courseId     String
+  courseCode   String
+  courseTitle  String
+  term         String
+  meetingTime  String
+  totalSeats   Int
+  crn          String?  @unique
+  instructor   String?
+  // Allowed hour values for this section's "Basis" at hire time,
+  // comma-separated (e.g. "5,6.7,10"; IT 105 uses "10,15") — admin-configurable
+  hourOptions  String   @default("5,6.7,10")
+  createdAt    DateTime @default(now())
+
+  assignedApplications Application[] @relation("AssignedSection")
+}
+
+// An applicant applies to a Course, not a specific Section. assignedSection
+// + hours ("Basis") are only set once a faculty member hires them into one
+// of that course's sections. Each GTA's hours across all their HIRED
+// sections in a term may not exceed 20.1 — enforced in application code.
+model Application {
+  id                String            @id @default(cuid())
+  applicant         User              @relation(fields: [applicantId], references: [id])
+  applicantId       String
+  course            Course            @relation(fields: [courseId], references: [id])
+  courseId          String
+  assignedSection   Section?          @relation("AssignedSection", fields: [assignedSectionId], references: [id])
+  assignedSectionId String?
+  hours             Decimal?          @db.Decimal(4, 1)
+  enrollmentType    EnrollmentType
+  resumeFileName    String?
+  // Asked once per semester (not once-ever, unlike the profile's ask-once
+  // fields) — lives here since each Application already carries its term
+  hoursWorkedOutsideGMU Decimal? @db.Decimal(5, 1)
+  status            ApplicationStatus @default(PENDING)
+  interviewScheduledAt DateTime?
+  submittedAt       DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@unique([applicantId, courseId])
+}

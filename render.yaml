@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: gta-portal
+    runtime: node
+    plan: free
+    rootDir: .
+    buildCommand: npm install --prefix server && npm install --prefix client && npm run build --prefix client
+    startCommand: npm start --prefix server
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Paste your Neon (or other) Postgres connection string in the Render
+      # dashboard after the first deploy — see DEPLOY.md. Must end with
+      # ?sslmode=require for Neon.
+      - key: DATABASE_URL
+        sync: false
+      # Render can generate this for you (click "Generate" in the dashboard)
+      # instead of typing one — either way, it must NOT be the dev value
+      # from server/.env.example.
+      - key: JWT_SECRET
+        generateValue: true
+      # Render sets PORT automatically for web services — server/src/index.js
+      # already reads process.env.PORT, so nothing to configure here.
