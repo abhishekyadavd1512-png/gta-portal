@@ -4,7 +4,10 @@ services:
     runtime: node
     plan: free
     rootDir: .
-    buildCommand: npm install --prefix server && npm install --prefix client && npm run build --prefix client
+    # --include=dev is required on the client install: NODE_ENV=production
+    # (set below) makes plain `npm install` skip devDependencies, but vite
+    # (the build tool) is listed there, so the build step fails without it.
+    buildCommand: npm install --prefix server && npm install --prefix client --include=dev && npm run build --prefix client
     startCommand: npm start --prefix server
     healthCheckPath: /api/health
     envVars:
