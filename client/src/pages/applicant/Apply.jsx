@@ -4,10 +4,13 @@ import { api } from '../../api';
 import { PROGRAMS } from '../../constants';
 
 const STEPS = ['Availability & Courses', 'Your Information', 'Education & Documents', 'Review & Submit'];
-// Max courses an applicant may apply to at once — same limit regardless of
-// full-time/part-time status (board correction, 2026-09-30). Kept in sync
-// with the same constant in server/src/routes/applications.js.
-const MAX_COURSES = 10;
+// No cap on how many courses an applicant may apply to in total — an
+// earlier 10-course ceiling (board correction, 2026-09-30) was removed per
+// team decision, 2026-10-07.
+//
+// Each individual submission is still for exactly ONE course at a time
+// (also decided 2026-10-07) — an applicant who wants to apply to another
+// course comes back and submits again, with no limit on how many times.
 
 export default function Apply() {
   const navigate = useNavigate();
@@ -72,20 +75,18 @@ export default function Apply() {
     });
   }, []);
 
-  const cap = MAX_COURSES;
-  const toggleSection = (id) => {
-    const next = new Set(selected);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    setSelected(next);
+  // One course per submission (team decision, 2026-10-07) — picking a
+  // different course replaces the current selection rather than adding to it.
+  const selectCourse = (id) => {
+    setSelected(selected.has(id) ? new Set() : new Set([id]));
   };
 
   const capNote = () => {
-    if (selected.size === 0) return { text: `Select at least one course (up to ${cap}).`, ok: false };
-    if (selected.size > cap) return { text: `You've selected ${selected.size} courses — you may select up to ${cap}. Remove one to continue.`, ok: false };
-    return { text: `${selected.size} of ${cap} courses selected.`, ok: true };
+    if (selected.size === 0) return { text: 'Select one course to apply to. You can submit another application afterward — there\'s no limit on how many courses you can apply to.', ok: false };
+    return { text: '1 course selected.', ok: true };
   };
 
-  const canAdvanceStep0 = selected.size > 0 && selected.size <= cap;
+  const canAdvanceStep0 = selected.size === 1;
 
   const goNext = async () => {
     setError('');
@@ -148,7 +149,7 @@ export default function Apply() {
         {step === 0 && (
           <>
             <h2>Availability &amp; Courses</h2>
-            <div className="sub">Select the courses you're available to support this term. A faculty member will assign you to a specific section (and hours) if you're hired.</div>
+            <div className="sub">Select one course you're available to support this term — each submission is for a single course, so you can apply to others separately afterward. A faculty member will assign you to a specific section (and hours) if you're hired.</div>
             <div className="field full">
               <label>Enrollment status</label>
               <select value={enrollmentType} onChange={(e) => { setEnrollmentType(e.target.value); }}>
@@ -164,7 +165,7 @@ export default function Apply() {
                   const isSelected = selected.has(c.id);
                   return (
                     <label key={c.id} className={`section-option ${isSelected ? 'selected' : ''}`}>
-                      <input type="checkbox" checked={isSelected} onChange={() => toggleSection(c.id)} />
+                      <input type="radio" name="course-select" checked={isSelected} onChange={() => selectCourse(c.id)} />
                       <div className="meta">
                         <div className="course">{c.courseCode} — {c.courseTitle}</div>
                         <div className="details">{c.term} · {c.sectionCount} section{c.sectionCount === 1 ? '' : 's'} offered</div>
@@ -292,7 +293,7 @@ export default function Apply() {
             {askOnce.paidPositionLast2Years && (
               <>
                 <div className="onb-q">
-                  <div className="onb-label">Have you held a paid position in the last 2 years at George Mason University?</div>
+                  <div className="onb-label">Have you held a paid position in the last 365 days at George Mason University?</div>
                   <div className="onb-toggle">
                     <button type="button" className={form.paidPositionLast2Years === true ? 'on' : ''} onClick={() => setForm({ ...form, paidPositionLast2Years: true })}>Yes</button>
                     <button type="button" className={form.paidPositionLast2Years === false ? 'on' : ''} onClick={() => setForm({ ...form, paidPositionLast2Years: false })}>No</button>
@@ -357,7 +358,7 @@ export default function Apply() {
                 )}
                 {form.paidPositionLast2Years !== null && (
                   <>
-                    <dt>Paid position at GMU (last 2 yrs)</dt><dd>{form.paidPositionLast2Years ? 'Yes' : 'No'}</dd>
+                    <dt>Paid position at GMU (last 365 days)</dt><dd>{form.paidPositionLast2Years ? 'Yes' : 'No'}</dd>
                   </>
                 )}
                 {form.isFinalSemester !== null && (

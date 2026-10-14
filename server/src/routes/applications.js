@@ -3,10 +3,11 @@ import { q, pool } from '../db.js';
 
 const router = Router();
 
-// Max courses an applicant may apply to at once — same limit regardless of
-// full-time/part-time status (board correction, 2026-09-30). Kept in sync
-// with the same constant in client/src/pages/applicant/Apply.jsx.
-const MAX_COURSES = 10;
+// There is deliberately no cap on how many courses an applicant may apply
+// to in total — an earlier 10-course ceiling (board correction, 2026-09-30)
+// was removed per team decision, 2026-10-07. Each submission is still for
+// one course at a time (client/src/pages/applicant/Apply.jsx), but an
+// applicant may submit as many separate applications as they want.
 // Max hours a GTA may be HIRED for, per term (2026-09-29 board meeting).
 // Enforced here (blocks new applications once reached) and again in
 // faculty.js (blocks an assign action that would push someone over it).
@@ -29,6 +30,12 @@ router.get('/mine', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
+  // Admin "Block" action (Applications Dashboard): a blocked applicant can't
+  // submit new applications, but anything they already have stands untouched.
+  if (req.user.blocked) {
+    return res.status(403).json({ error: 'Your applicant profile has been blocked from submitting new applications by an admin. Contact the GTA program office if you believe this is a mistake.' });
+  }
+
   const { courseIds, enrollmentType, resumeFileName, hoursWorkedOutsideGMU } = req.body || {};
   if (!Array.isArray(courseIds) || courseIds.length === 0) {
     return res.status(400).json({ error: 'courseIds must be a non-empty array' });
@@ -63,14 +70,6 @@ router.post('/', async (req, res) => {
     });
   }
 
-  const existing = await q('SELECT count(*)::int AS n FROM "Application" WHERE "applicantId" = $1', [req.user.id]);
-  const alreadyApplied = existing.rows[0].n;
-  if (alreadyApplied + courseIds.length > MAX_COURSES) {
-    return res.status(400).json({
-      error: `Students may have up to ${MAX_COURSES} active application(s). You already have ${alreadyApplied} and are requesting ${courseIds.length} more.`,
-    });
-  }
-
   // 20.1-hour cap — once a GTA's HIRED hours for a term reach the cap,
   // they're blocked from submitting any further applications for that term.
   const targetCourses = await q('SELECT id, term FROM "Course" WHERE id = ANY($1)', [courseIds]);
@@ -80,7 +79,8 @@ router.post('/', async (req, res) => {
       SELECT COALESCE(SUM(a.hours), 0) AS total
       FROM "Application" a
       JOIN "Course" c ON c.id = a."courseId"
-      WHERE a."applicantId" = $1 AND a.status = 'HIRED' AND c.term = $2
+      JOIN "Section" s ON s.id = a."assignedSectionId"
+      WHERE a."applicantId" = $1 AND a.status = 'HIRED' AND c.term = $2 AND s."countsTowardCap" = true
     `, [req.user.id, term]);
     const totalHired = Number(hoursResult.rows[0].total);
     if (totalHired >= HOUR_CAP) {

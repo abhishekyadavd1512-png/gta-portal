@@ -1,18 +1,54 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api';
+import { breakdownByTerm, TermBreakdown } from '../../components/StatTermBreakdown';
 
 const STATUS_LABEL = { PENDING: 'Pending', INTERVIEW: 'Interview', HIRED: 'Hired' };
+
+// Remembers the "flag stale after N days" threshold per browser, same
+// pattern as Admin's LAST_EXPORT_KEY/LAST_FLOW_TRIGGER_KEY — purely a local
+// display preference, not synced anywhere.
+const STALE_THRESHOLD_KEY = 'gta_faculty_stale_threshold_days';
+const DEFAULT_STALE_DAYS = 7;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+// An application is "stale" while it's still waiting on a faculty action
+// (PENDING = not yet reviewed, INTERVIEW = interview set up but not yet
+// moved to Hired/back to Pending) and nothing has touched it in more than
+// `thresholdDays`. `updatedAt` is bumped by the server on every status
+// change and on assign (see faculty.js), so this measures "time sitting in
+// its current state," not just time since it was first submitted. HIRED
+// applications are never stale — they're done.
+function daysSince(iso) {
+  return Math.floor((Date.now() - new Date(iso).getTime()) / MS_PER_DAY);
+}
+function isStale(a, thresholdDays) {
+  if (a.status !== 'PENDING' && a.status !== 'INTERVIEW') return false;
+  return daysSince(a.updatedAt) >= thresholdDays;
+}
 
 export default function Dashboard() {
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [programFilter, setProgramFilter] = useState('');
+  const [termFilter, setTermFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [offerReadyFilter, setOfferReadyFilter] = useState(false);
   const [sortKey, setSortKey] = useState('submittedAt');
   const [sortDir, setSortDir] = useState('desc');
   const [expandedId, setExpandedId] = useState(null);
+  const [staleDays, setStaleDays] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem(STALE_THRESHOLD_KEY));
+      return saved > 0 ? saved : DEFAULT_STALE_DAYS;
+    } catch { return DEFAULT_STALE_DAYS; }
+  });
+  const [staleOnlyFilter, setStaleOnlyFilter] = useState(false);
+
+  const updateStaleDays = (days) => {
+    setStaleDays(days);
+    try { localStorage.setItem(STALE_THRESHOLD_KEY, String(days)); } catch { /* ignore */ }
+  };
 
   const load = (showSpinner = true) => {
     if (showSpinner) setLoading(true);
@@ -21,20 +57,36 @@ export default function Dashboard() {
   useEffect(() => load(true), []);
 
   const programs = useMemo(() => [...new Set(applications.map((a) => a.program).filter(Boolean))], [applications]);
+  const terms = useMemo(() => [...new Set(applications.map((a) => a.term).filter(Boolean))], [applications]);
 
-  const stats = useMemo(() => ({
-    total: applications.length,
-    PENDING: applications.filter((a) => a.status === 'PENDING').length,
-    INTERVIEW: applications.filter((a) => a.status === 'INTERVIEW').length,
-    HIRED: applications.filter((a) => a.status === 'HIRED').length,
-    offerReady: applications.filter((a) => a.offerLetterReady).length,
-  }), [applications]);
+  const stats = useMemo(() => {
+    const pending = applications.filter((a) => a.status === 'PENDING');
+    const interview = applications.filter((a) => a.status === 'INTERVIEW');
+    const hired = applications.filter((a) => a.status === 'HIRED');
+    const offerReady = applications.filter((a) => a.offerLetterReady);
+    return {
+      total: applications.length,
+      totalByTerm: breakdownByTerm(applications),
+      PENDING: pending.length,
+      PENDINGByTerm: breakdownByTerm(pending),
+      INTERVIEW: interview.length,
+      INTERVIEWByTerm: breakdownByTerm(interview),
+      HIRED: hired.length,
+      HIREDByTerm: breakdownByTerm(hired),
+      offerReady: offerReady.length,
+      offerReadyByTerm: breakdownByTerm(offerReady),
+    };
+  }, [applications]);
+
+  const staleCount = useMemo(() => applications.filter((a) => isStale(a, staleDays)).length, [applications, staleDays]);
 
   const filtered = useMemo(() => {
     let rows = applications.filter((a) => {
       if (statusFilter && a.status !== statusFilter) return false;
       if (offerReadyFilter && !a.offerLetterReady) return false;
       if (programFilter && a.program !== programFilter) return false;
+      if (termFilter && a.term !== termFilter) return false;
+      if (staleOnlyFilter && !isStale(a, staleDays)) return false;
       if (search) {
         const s = search.toLowerCase();
         if (!a.applicantName.toLowerCase().includes(s) && !a.courseCode.toLowerCase().includes(s) && !a.courseTitle.toLowerCase().includes(s)) return false;
@@ -48,7 +100,7 @@ export default function Dashboard() {
       return 0;
     });
     return rows;
-  }, [applications, statusFilter, offerReadyFilter, programFilter, search, sortKey, sortDir]);
+  }, [applications, statusFilter, offerReadyFilter, programFilter, termFilter, staleOnlyFilter, staleDays, search, sortKey, sortDir]);
 
   const toggleSort = (key) => {
     if (sortKey === key) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
@@ -86,10 +138,10 @@ export default function Dashboard() {
   if (loading) return <div className="center-loading">Loading applications…</div>;
 
   const tileDefs = [
-    { key: '', label: 'Total Applicants', val: stats.total },
-    { key: 'PENDING', label: 'Pending Review', val: stats.PENDING },
-    { key: 'INTERVIEW', label: 'Interview', val: stats.INTERVIEW },
-    { key: 'HIRED', label: 'Hired', val: stats.HIRED },
+    { key: '', label: 'Total Applicants', val: stats.total, byTerm: stats.totalByTerm },
+    { key: 'PENDING', label: 'Pending Review', val: stats.PENDING, byTerm: stats.PENDINGByTerm },
+    { key: 'INTERVIEW', label: 'Interview', val: stats.INTERVIEW, byTerm: stats.INTERVIEWByTerm },
+    { key: 'HIRED', label: 'Hired', val: stats.HIRED, byTerm: stats.HIREDByTerm },
   ];
 
   return (
@@ -99,6 +151,7 @@ export default function Dashboard() {
           <button key={t.label} className={`stat-tile ${statusFilter === t.key ? 'active' : ''}`} onClick={() => { setStatusFilter(t.key); setExpandedId(null); }}>
             <div className="num">{t.val}</div>
             <div className="lbl">{t.label}</div>
+            <TermBreakdown rows={t.byTerm} />
           </button>
         ))}
         <button
@@ -108,6 +161,7 @@ export default function Dashboard() {
         >
           <div className="num">{stats.offerReady}</div>
           <div className="lbl">Offer Letter Ready</div>
+          <TermBreakdown rows={stats.offerReadyByTerm} />
         </button>
       </div>
       <div className="toolbar">
@@ -116,6 +170,10 @@ export default function Dashboard() {
           <option value="">All Programs</option>
           {programs.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
+        <select value={termFilter} onChange={(e) => setTermFilter(e.target.value)}>
+          <option value="">All semesters</option>
+          {terms.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
           <option value="">All Statuses</option>
           <option value="PENDING">Pending</option>
@@ -123,6 +181,22 @@ export default function Dashboard() {
           <option value="HIRED">Hired</option>
         </select>
         <button className="btn-export" onClick={exportCsv}>⬇ Export CSV</button>
+      </div>
+      <div className="toolbar stale-toolbar">
+        <label className="stale-toggle">
+          <input type="checkbox" checked={staleOnlyFilter} onChange={(e) => setStaleOnlyFilter(e.target.checked)} />
+          <span>⚠ Stale only {staleCount > 0 && <span className="stale-count-badge">{staleCount}</span>}</span>
+        </label>
+        <label className="stale-threshold">
+          Flag Pending/Interview as stale after
+          <input
+            type="number"
+            min="1"
+            value={staleDays}
+            onChange={(e) => { const v = Number(e.target.value); if (v > 0) updateStaleDays(v); }}
+          />
+          day{staleDays === 1 ? '' : 's'} with no update
+        </label>
       </div>
       <div className="result-count">{filtered.length} application{filtered.length === 1 ? '' : 's'}</div>
       <table className="app-table">
@@ -153,6 +227,7 @@ export default function Dashboard() {
               onToggle={() => setExpandedId(expandedId === a.id ? null : a.id)}
               onUpdateStatus={updateStatus}
               onAssign={assign}
+              staleDays={staleDays}
             />
           ))}
         </tbody>
@@ -170,7 +245,8 @@ function toLocalInputValue(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function FragmentRow({ application: a, expanded, onToggle, onUpdateStatus, onAssign }) {
+function FragmentRow({ application: a, expanded, onToggle, onUpdateStatus, onAssign, staleDays }) {
+  const stale = isStale(a, staleDays);
   const [scheduling, setScheduling] = useState(false);
   const [when, setWhen] = useState(toLocalInputValue(a.interviewScheduledAt));
   const [invitePreview, setInvitePreview] = useState(null);
@@ -250,7 +326,10 @@ function FragmentRow({ application: a, expanded, onToggle, onUpdateStatus, onAss
           )}
         </td>
         <td>{new Date(a.submittedAt).toLocaleDateString()}</td>
-        <td><span className={`pill ${a.status}`}>{STATUS_LABEL[a.status]}</span></td>
+        <td>
+          <span className={`pill ${a.status}`}>{STATUS_LABEL[a.status]}</span>
+          {stale && <span className="pill stale" title="No status change in a while — may need a follow-up">⚠ {daysSince(a.updatedAt)}d</span>}
+        </td>
         <td>
           {a.offerLetterReady
             ? <span className="pill HIRED">✓ Ready</span>
@@ -266,7 +345,11 @@ function FragmentRow({ application: a, expanded, onToggle, onUpdateStatus, onAss
                 <dl><dt>GPA</dt><dd>{a.gpa || <em>Not provided</em>}</dd><dt>Prior experience</dt><dd>{a.priorExperience || <em>Not provided</em>}</dd></dl>
                 <dl>
                   <dt>Submitted</dt><dd>{new Date(a.submittedAt).toLocaleString()}</dd>
-                  <dt>Current status</dt><dd><span className={`pill ${a.status}`}>{STATUS_LABEL[a.status]}</span></dd>
+                  <dt>Current status</dt>
+                  <dd>
+                    <span className={`pill ${a.status}`}>{STATUS_LABEL[a.status]}</span>
+                    {stale && <span className="pill stale" style={{ marginLeft: 6 }}>⚠ Stale — {daysSince(a.updatedAt)} days, no update</span>}
+                  </dd>
                   <dt>Interview</dt>
                   <dd>{a.interviewScheduledAt ? new Date(a.interviewScheduledAt).toLocaleString() : <em>Not scheduled</em>}</dd>
                 </dl>

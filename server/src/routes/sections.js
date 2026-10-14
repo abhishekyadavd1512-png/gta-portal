@@ -6,11 +6,14 @@ const router = Router();
 // Courses, grouped from Sections — this is what the Apply flow lists.
 // Applicants apply to a Course; the specific Section (and hours) only get
 // set once a faculty member assigns/hires them (see faculty.js).
+// Only counts/surfaces ACTIVE sections (Edit Sections upgrade) — a course
+// with zero active sections has nothing to apply for, so it's left out of
+// the Apply flow's list entirely rather than showing "0 sections offered".
 router.get('/courses', async (req, res) => {
   const result = await q(`
     SELECT c.*, count(s.id)::int AS "sectionCount"
     FROM "Course" c
-    LEFT JOIN "Section" s ON s."courseId" = c.id
+    JOIN "Section" s ON s."courseId" = c.id AND s.active = true
     GROUP BY c.id
     ORDER BY c."courseCode" ASC
   `);

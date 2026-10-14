@@ -17,7 +17,30 @@ export const PROGRAMS = [
 // whenever that list is available (see Profile.jsx's header comment).
 export const DEGREE_LEVELS = ["Bachelor's", "Master's", 'PhD', 'Other'];
 
-const TERM_ORDER = ['Spring', 'Summer', 'Fall'];
+export const TERM_ORDER = ['Spring', 'Summer', 'Fall'];
+
+// Short form for the Faculty/Admin dashboards' per-term stat breakdowns,
+// e.g. "Fall 2026" -> "Fa26", "Spring 2027" -> "Sp27" — matches the
+// "<Semester> <Year>" convention used everywhere terms are stored/generated
+// (see buildUpcomingTermOptions below). Falls back to the raw term string
+// for anything that doesn't match that shape (e.g. legacy/manually-typed
+// terms), so it never silently hides a term it can't parse.
+const SEASON_ABBR = { Spring: 'Sp', Summer: 'Su', Fall: 'Fa' };
+export function abbreviateTerm(term) {
+  const match = /^(Spring|Summer|Fall)\s+(\d{4})$/.exec(term || '');
+  if (!match) return term || '';
+  return `${SEASON_ABBR[match[1]]}${match[2].slice(-2)}`;
+}
+
+// Chronological sort key for "<Semester> <Year>" terms, so a per-term
+// breakdown lists terms in the order they actually happen (Spring, then
+// Summer, then Fall of the same year) instead of alphabetically. Unparseable
+// terms sort first (key 0) rather than being dropped.
+export function termSortKey(term) {
+  const match = /^(Spring|Summer|Fall)\s+(\d{4})$/.exec(term || '');
+  if (!match) return 0;
+  return Number(match[2]) * 3 + TERM_ORDER.indexOf(match[1]);
+}
 
 // Generates a rolling list of "<Semester> <Year>" options starting from the
 // current term (so it never needs manual updating as terms pass), e.g.

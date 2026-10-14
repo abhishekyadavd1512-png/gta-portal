@@ -37,6 +37,7 @@ model User {
   gNumber    String?
   phone      String?
   role       Role
+  blocked    Boolean  @default(false)
   program    String?
   department String?
   degree     String?
@@ -129,6 +130,8 @@ model Section {
   // Allowed hour values for this section's "Basis" at hire time,
   // comma-separated (e.g. "5,6.7,10"; IT 105 uses "10,15") — admin-configurable
   hourOptions  String   @default("5,6.7,10")
+  active           Boolean  @default(true)
+  countsTowardCap  Boolean  @default(true)
   createdAt    DateTime @default(now())
 
   assignedApplications Application[] @relation("AssignedSection")

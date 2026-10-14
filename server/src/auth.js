@@ -89,6 +89,7 @@ export function toPublicUser(user) {
     email: user.email,
     name: user.name,
     role: user.role,
+    blocked: user.blocked,
     gNumber: user.gNumber,
     phone: user.phone,
     program: user.program,

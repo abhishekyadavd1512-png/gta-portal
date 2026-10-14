@@ -22,9 +22,19 @@ const run = async () => {
     return;
   }
   for (const s of sections) {
+    // Each Section belongs to a Course (courseCode + term) — Course rows
+    // don't exist yet on a brand-new database, so create/reuse one first.
+    // (On an older database this backfill already happened via
+    // migrations/006_course_level_applications_and_hours.sql.)
+    const course = await pool.query(
+      `INSERT INTO "Course" ("courseCode","courseTitle",term) VALUES ($1,$2,$3)
+       ON CONFLICT ("courseCode", term) DO UPDATE SET "courseTitle" = EXCLUDED."courseTitle"
+       RETURNING id`,
+      [s.courseCode, s.courseTitle, s.term]
+    );
     await pool.query(
-      'INSERT INTO "Section" ("courseCode","courseTitle",term,"meetingTime","totalSeats") VALUES ($1,$2,$3,$4,$5)',
-      [s.courseCode, s.courseTitle, s.term, s.meetingTime, s.totalSeats]
+      'INSERT INTO "Section" ("courseId","courseCode","courseTitle",term,"meetingTime","totalSeats") VALUES ($1,$2,$3,$4,$5,$6)',
+      [course.rows[0].id, s.courseCode, s.courseTitle, s.term, s.meetingTime, s.totalSeats]
     );
   }
   console.log(`Seeded ${sections.length} sections.`);

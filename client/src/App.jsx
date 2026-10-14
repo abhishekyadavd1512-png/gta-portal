@@ -8,6 +8,7 @@ import Apply from './pages/applicant/Apply';
 import Applications from './pages/applicant/Applications';
 import Dashboard from './pages/faculty/Dashboard';
 import Admin from './pages/admin/Admin';
+import AdminDashboard from './pages/admin/AdminDashboard';
 
 function ApplicantTabs() {
   return (
@@ -52,9 +53,14 @@ function AppRoutes() {
         )}
         {user.role === 'ADMIN' && (
           <>
-            <nav className="tabs"><span className="active" style={{ padding: '12px 18px', fontSize: 14, fontWeight: 600, color: 'var(--mason-green-dark)' }}>Admin</span></nav>
+            <nav className="tabs">
+              <NavLink to="/admin/dashboard" className={({ isActive }) => isActive ? 'active' : ''}>Applications Dashboard</NavLink>
+              <NavLink to="/admin/manage" className={({ isActive }) => isActive ? 'active' : ''}>Users &amp; Sections</NavLink>
+            </nav>
             <Routes>
-              <Route path="*" element={<Admin />} />
+              <Route path="/admin/dashboard" element={<AdminDashboard />} />
+              <Route path="/admin/manage" element={<Admin />} />
+              <Route path="*" element={<Navigate to="/admin/dashboard" replace />} />
             </Routes>
           </>
         )}

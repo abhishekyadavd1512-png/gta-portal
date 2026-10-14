@@ -1,40 +1,17 @@
 import { Router } from 'express';
 import { q } from '../db.js';
+import { computeOfferLetterStatus } from '../lib/offerLetter.js';
 
 const router = Router();
 
 // Max hours a GTA may be HIRED for, per term (2026-09-29 board meeting) —
 // kept in sync with the same constant in applications.js.
 const HOUR_CAP = 20.1;
-// Minimum GPA to apply (board feedback item 3, "Offer Letter") — kept in
-// sync with the same constant in applications.js. Re-checked here (not just
-// at application time) because profile fields can change after submission.
-const MIN_GPA = 3.0;
 
-// Board feedback item 4 ("Offer Letter — SharePoint"): the web app never
-// triggers the actual offer letter process or talks to SharePoint — that
-// stays a manual, external, roughly-weekly process. All this computes is a
-// read-only "Offer Letter Ready" flag so whoever runs that export knows,
-// at a glance, which fully-assigned (HIRED + section + hours set) GTAs also
-// satisfy every one of the board's "Offer Letter" eligibility rules: GPA
-// floor, minimum courses registered, Tuition status answered, and Hours
-// worked outside GMU answered for the term. Returns both the boolean and
-// the specific list of what's missing, so faculty can see why someone
-// isn't ready yet instead of just a plain yes/no.
-function computeOfferLetterStatus(a) {
-  if (a.status !== 'HIRED' || a.assignedSectionId == null || a.hours == null) {
-    return { offerLetterReady: false, offerLetterMissing: ['Not fully assigned to a section yet'] };
-  }
-  const missing = [];
-  const gpaNum = Number(a.gpa);
-  if (!a.gpa || Number.isNaN(gpaNum) || gpaNum < MIN_GPA) missing.push(`GPA below ${MIN_GPA.toFixed(1)}`);
-  const minCourses = (a.enrollmentType === 'FULL_TIME' && a.isFinalSemester === true) ? 1 : 2;
-  const registeredNum = Number(a.coursesRegisteredNextTerm);
-  if (a.coursesRegisteredNextTerm == null || Number.isNaN(registeredNum) || registeredNum < minCourses) missing.push('Courses registered below minimum');
-  if (!a.tuitionStatus) missing.push('Tuition status not answered');
-  if (a.hoursWorkedOutsideGMU == null) missing.push('Hours worked outside GMU not answered');
-  return { offerLetterReady: missing.length === 0, offerLetterMissing: missing };
-}
+// computeOfferLetterStatus() now lives in ../lib/offerLetter.js — shared
+// with the Admin dashboard's "Export Offer Ready" CSV and "Trigger Offer
+// Letter Flow" (Power Automate hand-off) actions, see that file for the
+// full board-feedback context (item 4, "Offer Letter — SharePoint").
 
 router.get('/applications', async (req, res) => {
   const { status, program, term, search } = req.query;
@@ -53,7 +30,7 @@ router.get('/applications', async (req, res) => {
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await q(`
-    SELECT a.*, u.name AS "applicantName", u.email AS "applicantEmail", u.program, u.gpa, u."priorExperience",
+    SELECT a.*, u.name AS "applicantName", u.email AS "applicantEmail", u.program, u.gpa, u."priorExperience", u.blocked AS "applicantBlocked",
            u."isFinalSemester", u."coursesRegisteredNextTerm", u."tuitionStatus",
            c."courseCode", c."courseTitle", c.term,
            s."meetingTime" AS "assignedMeetingTime", s.instructor AS "assignedInstructor", s.crn AS "assignedCrn",
@@ -67,7 +44,8 @@ router.get('/applications', async (req, res) => {
            (SELECT COALESCE(SUM(a2.hours), 0)
             FROM "Application" a2
             JOIN "Course" c2 ON c2.id = a2."courseId"
-            WHERE a2."applicantId" = a."applicantId" AND a2.status = 'HIRED' AND c2.term = c.term
+            JOIN "Section" s2 ON s2.id = a2."assignedSectionId"
+            WHERE a2."applicantId" = a."applicantId" AND a2.status = 'HIRED' AND c2.term = c.term AND s2."countsTowardCap" = true
            ) AS "applicantTermHours"
     FROM "Application" a
     JOIN "User" u ON u.id = a."applicantId"
@@ -90,16 +68,20 @@ router.get('/applications/:id/sections', async (req, res) => {
   const application = appResult.rows[0];
   if (!application) return res.status(404).json({ error: 'Application not found' });
 
+  // Only offer active sections to assign into — except the one this
+  // application is already assigned to (if any), so reopening "Reassign
+  // Section / Hours" on an existing hire still shows their current section
+  // even if an admin has since deactivated it (e.g. via a CLSS re-import).
   const sectionsResult = await q(`
     SELECT s.*,
       regexp_replace(s."meetingTime", '^Section (\\S+).*', '\\1') AS "sectionNumber",
       s."totalSeats" - COALESCE(SUM(CASE WHEN a.status = 'HIRED' THEN 1 ELSE 0 END), 0)::int AS "seatsOpen"
     FROM "Section" s
     LEFT JOIN "Application" a ON a."assignedSectionId" = s.id
-    WHERE s."courseId" = $1
+    WHERE s."courseId" = $1 AND (s.active = true OR s.id = $2)
     GROUP BY s.id
     ORDER BY s."meetingTime" ASC
-  `, [application.courseId]);
+  `, [application.courseId, application.assignedSectionId]);
 
   // Total hours this applicant is already HIRED for this term, across every
   // one of their applications — including this one, if it's already hired
@@ -113,7 +95,8 @@ router.get('/applications/:id/sections', async (req, res) => {
     SELECT COALESCE(SUM(a.hours), 0) AS total
     FROM "Application" a
     JOIN "Course" c ON c.id = a."courseId"
-    WHERE a."applicantId" = $1 AND a.status = 'HIRED' AND c.term = (SELECT term FROM "Course" WHERE id = $2)
+    JOIN "Section" s ON s.id = a."assignedSectionId"
+    WHERE a."applicantId" = $1 AND a.status = 'HIRED' AND c.term = (SELECT term FROM "Course" WHERE id = $2) AND s."countsTowardCap" = true
   `, [application.applicantId, application.courseId]);
 
   res.json({
@@ -147,20 +130,26 @@ router.patch('/applications/:id/assign', async (req, res) => {
   }
 
   // 20.1-hour cap: this hire's hours + whatever else the applicant is
-  // already HIRED for this term must not exceed it.
+  // already HIRED for this term must not exceed it — unless this section is
+  // flagged countsTowardCap=false (Edit Sections), in which case this hire
+  // is exempt from the cap entirely (it still gets recorded, it just isn't
+  // checked against or counted toward the limit elsewhere).
   const termResult = await q('SELECT term FROM "Course" WHERE id = $1', [application.courseId]);
   const term = termResult.rows[0].term;
-  const hoursAlready = await q(`
-    SELECT COALESCE(SUM(a.hours), 0) AS total
-    FROM "Application" a
-    JOIN "Course" c ON c.id = a."courseId"
-    WHERE a."applicantId" = $1 AND a.status = 'HIRED' AND c.term = $2 AND a.id != $3
-  `, [application.applicantId, term, application.id]);
-  const totalIfAssigned = Number(hoursAlready.rows[0].total) + hoursNum;
-  if (totalIfAssigned > HOUR_CAP) {
-    return res.status(400).json({
-      error: `Assigning ${hoursNum} hours would bring this applicant to ${totalIfAssigned} hours for ${term}, over the ${HOUR_CAP}-hour maximum (they're already hired for ${hoursAlready.rows[0].total} elsewhere this term).`,
-    });
+  if (section.countsTowardCap) {
+    const hoursAlready = await q(`
+      SELECT COALESCE(SUM(a.hours), 0) AS total
+      FROM "Application" a
+      JOIN "Course" c ON c.id = a."courseId"
+      JOIN "Section" s2 ON s2.id = a."assignedSectionId"
+      WHERE a."applicantId" = $1 AND a.status = 'HIRED' AND c.term = $2 AND a.id != $3 AND s2."countsTowardCap" = true
+    `, [application.applicantId, term, application.id]);
+    const totalIfAssigned = Number(hoursAlready.rows[0].total) + hoursNum;
+    if (totalIfAssigned > HOUR_CAP) {
+      return res.status(400).json({
+        error: `Assigning ${hoursNum} hours would bring this applicant to ${totalIfAssigned} hours for ${term}, over the ${HOUR_CAP}-hour maximum (they're already hired for ${hoursAlready.rows[0].total} elsewhere this term).`,
+      });
+    }
   }
 
   const result = await q(

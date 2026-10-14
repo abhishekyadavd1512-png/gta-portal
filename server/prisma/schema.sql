@@ -17,6 +17,7 @@ CREATE TABLE "User" (
   "gNumber"           TEXT,
   phone               TEXT,
   role                "Role" NOT NULL,
+  blocked             BOOLEAN NOT NULL DEFAULT false,
   program             TEXT,
   department          TEXT,
   degree              TEXT,
@@ -105,6 +106,12 @@ CREATE TABLE "Section" (
   -- separated (e.g. "5,6.7,10"; IT 105 uses "10,15") — admin-configurable,
   -- see migrations/006_course_level_applications_and_hours.sql
   "hourOptions" TEXT NOT NULL DEFAULT '5,6.7,10',
+  -- Edit Sections upgrade (migrations/010): active=false hides a section
+  -- from the Apply flow and from assignment pickers without touching any
+  -- existing hire into it. countsTowardCap=false exempts hours hired into
+  -- this section from the 20.1-hour/term cap.
+  "active"          BOOLEAN NOT NULL DEFAULT true,
+  "countsTowardCap" BOOLEAN NOT NULL DEFAULT true,
   "createdAt"   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
